@@ -227,13 +227,18 @@ def create_session_endpoint():
 def list_sessions_endpoint():
     """List all sessions."""
     lst = list_sessions()
+
+    def to_iso(value):
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return value
     
     # Convert to Pydantic models
     sessions = [
         SessionInfo(
             id=s.get("id") or s.get("session_id", ""),
             session_id=s.get("id") or s.get("session_id", ""),
-            created_at=s.get("created_at"),
+            created_at=to_iso(s.get("created_at")),
             message_count=s.get("message_count")
         )
         for s in lst
@@ -314,13 +319,17 @@ def get_session_messages_endpoint(session_id):
         content = m.get("content", "")
         if m.get("role") == "assistant":
             content = strip_hidden_doc_tags(content)
+
+        created_at = m.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
         
         messages.append(
             MessageInfo(
                 id=m.get("id", 0),
                 role=m.get("role", "user"),
                 content=content,
-                timestamp=m.get("created_at")
+                timestamp=created_at
             )
         )
     

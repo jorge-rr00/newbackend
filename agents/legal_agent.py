@@ -1,4 +1,5 @@
 """Legal specialist agent."""
+import os
 from typing import List
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
@@ -14,7 +15,8 @@ class LegalAgent:
         """Initialize legal agent with LLM and RAG retriever."""
         self.llm = get_llm(temperature=1.0)
         try:
-            self.search_client = RAGRetriever("multimodal-rag-1770652413829")
+            index_name = os.getenv("AZURE_SEARCH_INDEX_LEGAL") or "multimodal-rag-1770652413829"
+            self.search_client = RAGRetriever(index_name)
         except Exception as e:
             print(f"[LegalAgent] Warning: Could not initialize search client: {e}")
             self.search_client = None

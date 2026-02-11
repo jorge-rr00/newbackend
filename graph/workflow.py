@@ -97,6 +97,14 @@ class LangGraphAssistant:
             return {"final_response": "No he recibido la pregunta del usuario. Reintenta."}
 
         doc_context = truncate_doc(state.get("extracted_text", "") or "", MAX_DOC_CHARS)
+        ql = (user_query or "").lower()
+        is_finlegal = any(k in ql for k in TOPIC_KEYWORDS.get("financial", [])) or \
+                     any(k in ql for k in TOPIC_KEYWORDS.get("legal", []))
+
+        if not doc_context.strip() and is_finlegal:
+            if any(k in ql for k in TOPIC_KEYWORDS.get("legal", [])):
+                return {"domain": "legal", "final_response": ""}
+            return {"domain": "financial", "final_response": ""}
 
         sys_prompt = (
             "You are the Senior Orchestrator.\n"
@@ -120,10 +128,6 @@ class LangGraphAssistant:
 
         # Direct answer
         direct_answer = (res.content or "").strip()
-        ql = (user_query or "").lower()
-        is_finlegal = any(k in ql for k in TOPIC_KEYWORDS.get("financial", [])) or \
-                     any(k in ql for k in TOPIC_KEYWORDS.get("legal", []))
-
         if not is_finlegal:
             polite_msg = (
                 "Lo siento, no dispongo de información sobre ese tema. Sólo puedo ayudarte en temas financieros y legales."

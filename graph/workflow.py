@@ -1,4 +1,5 @@
 """LangGraph-based LLM orchestrator engine."""
+import logging
 import operator
 from typing import List, Dict, TypedDict, Annotated
 
@@ -29,6 +30,22 @@ TOPIC_KEYWORDS = {
         "testamento", "acuerdo", "litigio", "arrend",
     ],
 }
+
+DOC_REF_KEYWORDS = [
+    "documento",
+    "archivo",
+    "adjunto",
+    "contrato",
+    "clausula",
+    "cláusula",
+    "este documento",
+    "segun el documento",
+    "según el documento",
+]
+
+logger = logging.getLogger("nova.workflow")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 
 class AgentState(TypedDict):
@@ -66,7 +83,7 @@ class LangGraphAssistant:
         if not state.get("file_paths"):
             return {"extracted_text": state.get("extracted_text", "") or ""}
 
-        print("[Node: Tool] Processing new files...")
+        logger.info("[Node: Tool] Processing new files...", extra={"node": "tool"})
         text_dump = ""
         for p in state["file_paths"]:
             ext = p.split(".")[-1].lower()
@@ -80,14 +97,14 @@ class LangGraphAssistant:
                     d = docx.Document(p)
                     text_dump += "\n".join([para.text for para in d.paragraphs])
                 else:
-                    print(f"[Node: Tool] Unsupported extension: {ext}")
+                    logger.info(f"[Node: Tool] Unsupported extension: {ext}")
             except Exception as e:
-                print(f"[Node: Tool] Error processing {p}: {e}")
+                logger.warning(f"[Node: Tool] Error processing {p}: {e}")
 
         # Combine previous (memory) + new
         combined_text = (state.get("extracted_text", "") or "") + "\n" + (text_dump or "")
         combined_text = truncate_doc(combined_text.strip(), MAX_DOC_CHARS)
-        print(f"[Node: Tool] Extracted chars: {len(combined_text)}")
+        logger.info(f"[Node: Tool] Extracted chars: {len(combined_text)}")
         return {"extracted_text": combined_text}
 
     def orchestrator_node(self, state: AgentState):
@@ -100,10 +117,13 @@ class LangGraphAssistant:
         ql = (user_query or "").lower()
         is_finlegal = any(k in ql for k in TOPIC_KEYWORDS.get("financial", [])) or \
                      any(k in ql for k in TOPIC_KEYWORDS.get("legal", []))
+        has_doc_ref = any(k in ql for k in DOC_REF_KEYWORDS)
 
-        if not doc_context.strip() and is_finlegal:
+        if is_finlegal and not state.get("file_paths") and not has_doc_ref:
             if any(k in ql for k in TOPIC_KEYWORDS.get("legal", [])):
+                logger.info("[Node: Orchestrator] Heuristic route -> legal", extra={"node": "orchestrator"})
                 return {"domain": "legal", "final_response": ""}
+            logger.info("[Node: Orchestrator] Heuristic route -> financial", extra={"node": "orchestrator"})
             return {"domain": "financial", "final_response": ""}
 
         sys_prompt = (
@@ -123,7 +143,7 @@ class LangGraphAssistant:
         # Route if the model explicitly emits DOMAIN:...
         if "DOMAIN:" in upper:
             domain = "legal" if "LEGAL" in upper else "financial"
-            print(f"[Node: Orchestrator] Routing -> {domain}")
+            logger.info(f"[Node: Orchestrator] Routing -> {domain}")
             return {"domain": domain, "final_response": ""}
 
         # Direct answer
@@ -148,7 +168,7 @@ class LangGraphAssistant:
         if not agent:
             return {"specialist_analysis": "No se pudo acceder al agente especialista."}
 
-        print(f"[Node: Specialist] Using {domain} agent...")
+        logger.info(f"[Node: Specialist] Using {domain} agent...")
         try:
             analysis = agent.analyze(
                 query=query,
@@ -157,7 +177,7 @@ class LangGraphAssistant:
             )
             return {"specialist_analysis": analysis}
         except Exception as e:
-            print(f"[Node: Specialist] Agent error: {e}")
+            logger.warning(f"[Node: Specialist] Agent error: {e}")
             return {"specialist_analysis": "Lo siento, ocurrió un error al procesar tu consulta."}
 
     def final_redactor_node(self, state: AgentState):

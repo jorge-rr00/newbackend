@@ -1,4 +1,5 @@
 """Legal specialist agent."""
+import logging
 import os
 from typing import List
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -17,9 +18,15 @@ class LegalAgent:
         try:
             index_name = os.getenv("AZURE_SEARCH_INDEX_LEGAL") or "multimodal-rag-1770652413829"
             self.search_client = RAGRetriever(index_name)
+            self.index_name = index_name
         except Exception as e:
             print(f"[LegalAgent] Warning: Could not initialize search client: {e}")
             self.search_client = None
+            self.index_name = ""
+
+        self.logger = logging.getLogger("nova.rag.legal")
+        if not self.logger.handlers:
+            logging.basicConfig(level=logging.INFO)
     
     def analyze(
         self, 
@@ -44,9 +51,10 @@ class LegalAgent:
         # Get RAG context
         rag_data = ""
         if self.search_client:
-            print(f"[LegalAgent] Performing RAG lookup...")
+            self.logger.info(f"[LegalAgent] RAG lookup index={self.index_name}")
             try:
-                results = self.search_client.search(query=query, top=3)
+                results = list(self.search_client.search(query=query, top=3))
+                self.logger.info(f"[LegalAgent] RAG results={len(results)}")
                 rag_texts = []
                 for r in results:
                     txt = self._extract_text_from_result(r)
@@ -54,7 +62,7 @@ class LegalAgent:
                         rag_texts.append(txt)
                 rag_data = "\n".join(rag_texts)
             except Exception as e:
-                print(f"[LegalAgent] RAG error: {e}")
+                self.logger.warning(f"[LegalAgent] RAG error: {e}")
                 rag_data = ""
         
         # Prepare context

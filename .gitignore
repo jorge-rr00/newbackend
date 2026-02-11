@@ -1,0 +1,13 @@
+# Entorno virtual
+.venv/
+
+# Carpeta de uploads
+uploads/
+
+# Base de datos local
+*.db
+
+# Archivos __pycache__
+__pycache__/
+*.pyc
+

@@ -1,0 +1,53 @@
+1. La Clase Base: AzureOpenAIClient
+Es la infraestructura de comunicación.
+
+Función: Centraliza la conexión con el modelo de lenguaje en Azure.
+
+Puntos clave: Configura el base_url para que la librería estándar de OpenAI pueda hablar con Azure y maneja el parámetro max_completion_tokens, que es el que requieren los modelos de la serie o1 que estás utilizando.
+
+2. El Filtro de Seguridad: GuardrailAgent
+Es el primer agente que actúa. Su trabajo es "decir que no" si la consulta se sale de los límites.
+
+Validación de archivos: Comprueba que las extensiones sean permitidas (PDF, Docx, imágenes).
+
+Clasificación semántica: Utiliza palabras clave y una llamada rápida al LLM para determinar si la pregunta es legal, financiera o "basura". Si no encaja, bloquea la petición antes de gastar tokens en procesos más caros.
+
+3. El Especialista en Datos: ToolAgent
+Este agente no usa IA, usa herramientas de extracción de datos.
+
+PDF/Docx: Usa librerías como PyPDF2 y python-docx para "leer" los documentos.
+
+OCR (Imágenes): Si subes una foto, intenta usar pytesseract para convertir esa imagen en texto que el modelo pueda entender.
+
+4. La Inteligencia RAG: BaseRAGAgent y sus hijos (Legal / Financial)
+Esta es la parte más avanzada del código. Implementa el patrón RAG (Retrieval-Augmented Generation).
+
+BaseRAGAgent: Gestiona la conexión con Azure AI Search. Contiene el método _rag_lookup que envía la pregunta del usuario al índice de búsqueda (laws-index) para recuperar los documentos más parecidos (por score de relevancia).
+
+LegalAgent / FinancialAgent: Heredan de la base. Su función answer es la "cocina":
+
+Llaman al buscador de Azure Search.
+
+Combinan el texto del PDF que subió el usuario con los fragmentos de ley encontrados.
+
+Construyen el Prompt final y lo envían al modelo para obtener la respuesta experta.
+
+5. El Director de Orquesta: OrchestratorAgent
+Es el encargado de la lógica de flujo.
+
+Decisión de dominio: Analiza la pregunta y decide: "¿Esto va para el especialista Legal o el Financiero?".
+
+Coordinación: Activa al ToolAgent para leer archivos y luego pasa el testigo al agente especializado correspondiente.
+
+Resumen del Flujo de Datos en el código:
+Entrada: Orchestrator.respond(query, files)
+
+Extracción: ToolAgent procesa los files y devuelve un diccionario de textos.
+
+Ruta: _choose_domain decide si la consulta es legal o financial.
+
+Búsqueda Externa: El agente elegido llama a _rag_lookup y consulta tu base de datos de leyes en Azure Search.
+
+Generación: Se envía todo a Azure OpenAI con el rol de sistema "Eres un asistente experto...".
+
+Salida: Devuelve el string final con la respuesta legal o financiera.

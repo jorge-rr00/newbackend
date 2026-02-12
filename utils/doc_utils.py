@@ -1,17 +1,20 @@
 """Document utility functions for managing hidden document text."""
 import os
 import re
-import time
+import tempfile
 from typing import List
 
-import requests
+from skimage.filters import threshold_sauvola
+from skimage.util import img_as_ubyte
+from skimage import io
+from azure.ai.vision.imageanalysis import ImageAnalysisClient
+from azure.ai.vision.imageanalysis.models import VisualFeatures
+from azure.core.credentials import AzureKeyCredential
 
 try:
     from PIL import Image
-    import pytesseract
 except ImportError:
     Image = None
-    pytesseract = None
 
 HIST_TAG_START = "<!--HISTORICAL_DOC_TEXT-->"
 HIST_TAG_END = "<!--END_HISTORICAL_DOC_TEXT-->"
@@ -69,47 +72,33 @@ def _ocr_image_with_azure(path: str) -> str:
     if not endpoint or not key:
         return ""
 
-    url = endpoint.rstrip("/") + "/vision/v3.2/read/analyze?language=es"
-    headers = {
-        "Ocp-Apim-Subscription-Key": key,
-        "Content-Type": "application/octet-stream",
-    }
-
     with open(path, "rb") as f:
-        resp = requests.post(url, headers=headers, data=f, timeout=20)
-    if resp.status_code not in (200, 202):
-        return ""
+        image_bytes = f.read()
 
-    op_url = resp.headers.get("Operation-Location")
-    if not op_url:
-        return ""
+    client = ImageAnalysisClient(endpoint=endpoint, credential=AzureKeyCredential(key))
+    result = client.analyze(image_data=image_bytes, visual_features=[VisualFeatures.READ])
 
-    for _ in range(10):
-        time.sleep(0.7)
-        poll = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": key}, timeout=20)
-        data = poll.json()
-        status = (data.get("status") or "").lower()
-        if status == "succeeded":
-            lines = []
-            for page in data.get("analyzeResult", {}).get("readResults", []):
-                for line in page.get("lines", []):
-                    txt = line.get("text", "")
-                    if txt:
-                        lines.append(txt)
-            return "\n".join(lines)
-        if status == "failed":
-            break
-
-    return ""
+    lines = []
+    if result.read and result.read.blocks:
+        for block in result.read.blocks:
+            for line in block.lines:
+                txt = line.text
+                if txt:
+                    lines.append(txt)
+    return "\n".join(lines)
 
 
 def ocr_image(path: str) -> str:
-    if pytesseract and Image:
-        try:
-            text = pytesseract.image_to_string(Image.open(path))
+    # Prefer Sauvola + Azure Read for images when possible
+    sk_img = io.imread(path, as_gray=True)
+    sk_binary = img_as_ubyte(sk_img > threshold_sauvola(sk_img))
+    if Image:
+        image = Image.fromarray(sk_binary)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
+            image.save(tmp, format="PNG")
+            tmp.flush()
+            text = _ocr_image_with_azure(tmp.name)
             if text.strip():
                 return text
-        except Exception:
-            pass
 
     return _ocr_image_with_azure(path)

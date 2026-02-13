@@ -67,16 +67,31 @@ class LegalAgent:
         
         # Prepare context
         doc_text = truncate_doc(document_text or "", MAX_DOC_CHARS)
-        
-        # Check if we have any information
-        if not rag_data.strip() and not doc_text.strip():
-            return "Lo siento, no dispongo de información legal sobre ese tema en la base de conocimientos."
+
+        history_text = ""
+        if messages:
+            recent = []
+            for m in messages[-6:]:
+                role = "Usuario"
+                if isinstance(m, SystemMessage):
+                    role = "Sistema"
+                elif not isinstance(m, HumanMessage):
+                    role = "Asistente"
+                content = getattr(m, "content", "") or ""
+                if content.strip():
+                    recent.append(f"{role}: {content.strip()}")
+            history_text = "\n".join(recent)
         
         # Build prompt
         prompt = (
-            "Eres un especialista legal experto. RESPONDE ÚNICAMENTE usando el contexto RAG y el DOCUMENTO del usuario.\n"
-            "Si la información no está presente, responde: 'No dispongo de información sobre ese tema.'\n"
+            "Eres un especialista legal experto. RESPONDE usando el DOCUMENTO del usuario, el contexto RAG y, si aplica, la conversacion previa.\n"
+            "Si el usuario pide repetir o aclarar una respuesta previa, responde usando la conversacion.\n"
+            "Si la pregunta es confusa o sin sentido, pide al usuario que la reformule de forma educada.\n"
+            "Si la pregunta esta claramente fuera del ambito legal/financiero, responde exactamente: 'Lo siento, no dispongo de información sobre ese tema. Sólo puedo ayudarte en temas financieros y legales.'\n"
+            "Si no hay suficiente informacion en el contexto disponible, indicalo y pide mas detalle o un documento.\n"
             "Responde en español (castellano), de forma clara y profesional.\n"
+            "\nCONVERSACION RECIENTE:\n"
+            f"{history_text}\n"
             "\nDOCUMENTO DEL USUARIO:\n"
             f"{doc_text}\n"
             "\nCONTEXTO RAG (Base de conocimientos legales):\n"

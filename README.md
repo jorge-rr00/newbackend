@@ -1,4 +1,3 @@
-
 # NOVA Assistant — Backend
 
 Este backend gestiona los agentes (Guardrail y Orquestador), el procesamiento de documentos, la persistencia de sesiones y la integración con Azure OpenAI.
@@ -72,6 +71,22 @@ python main.py
 
 # por defecto el backend corre en http://localhost:5100
 ```
+
+**⚠️ Nota importante sobre acceso a la base de datos**
+
+Si estás ejecutando el código en local y la base de datos PostgreSQL está alojada en Azure, debes configurar el acceso de red:
+
+1. Accede al recurso de PostgreSQL en el portal de Azure
+2. Ve a la sección de **Networking** o **Firewalls and virtual networks**
+3. Añade tu IP pública actual a la lista de direcciones IP permitidas
+
+Para obtener tu IP pública, puedes ejecutar:
+
+```bash
+curl ifconfig.me
+```
+
+Sin este paso, la conexión a la base de datos será rechazada por el firewall de Azure.
 
 Probar la demo (flujo backend + frontend)
 
@@ -158,4 +173,3 @@ Recomendaciones para producción
 
 ¿Qué sigue?
 - Añadir un README de despliegue para Azure (deployment de la API, contenedores) o generar ejemplos Postman/Insomnia si quieres. Indícame qué prefieres.
-

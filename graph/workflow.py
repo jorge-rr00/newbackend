@@ -43,6 +43,30 @@ DOC_REF_KEYWORDS = [
     "según el documento",
 ]
 
+FOLLOWUP_KEYWORDS = [
+    "repite",
+    "repetir",
+    "otra vez",
+    "de nuevo",
+    "lo anterior",
+    "mensaje anterior",
+    "ultimo mensaje",
+    "último mensaje",
+    "que dijiste",
+    "que me dijiste",
+    "puedes repetir",
+    "puedes explicarlo",
+    "explicalo de otra manera",
+    "explicalo",
+    "no he entendido",
+    "no entendi",
+    "reformula",
+    "aclara",
+    "aclarame",
+    "resumelo",
+    "resumen",
+]
+
 logger = logging.getLogger("nova.workflow")
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
@@ -118,6 +142,7 @@ class LangGraphAssistant:
         is_finlegal = any(k in ql for k in TOPIC_KEYWORDS.get("financial", [])) or \
                      any(k in ql for k in TOPIC_KEYWORDS.get("legal", []))
         has_doc_ref = any(k in ql for k in DOC_REF_KEYWORDS)
+        is_followup = any(k in ql for k in FOLLOWUP_KEYWORDS)
 
         if is_finlegal and not state.get("file_paths") and not has_doc_ref:
             if any(k in ql for k in TOPIC_KEYWORDS.get("legal", [])):
@@ -132,12 +157,15 @@ class LangGraphAssistant:
             "Rules:\n"
             "1) If the answer is in the document, answer directly and stop.\n"
             "2) If NOT in the document and need legal/financial knowledge, respond with 'DOMAIN:LEGAL' or 'DOMAIN:FINANCIAL'.\n"
-            "3) Respond in Spanish (Castellano).\n"
+            "3) If the user asks to repeat, clarify, or refer to previous answers, respond based on the conversation context.\n"
+            "4) If the query is nonsense or unclear, ask the user to repeat or reformulate.\n"
+            "5) If the query is clearly out of scope (not legal/financial and not a follow-up), respond exactly: 'Lo siento, no dispongo de información sobre ese tema. Sólo puedo ayudarte en temas financieros y legales.'\n"
+            "6) Respond in Spanish (Castellano).\n"
             "\nDOCUMENT:\n"
             f"{doc_context}"
         )
 
-        res = self.llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=user_query)])
+        res = self.llm.invoke([SystemMessage(content=sys_prompt)] + (state.get("messages") or []))
         upper = (res.content or "").upper().strip()
 
         # Route if the model explicitly emits DOMAIN:...
@@ -148,7 +176,7 @@ class LangGraphAssistant:
 
         # Direct answer
         direct_answer = (res.content or "").strip()
-        if not is_finlegal:
+        if not is_finlegal and not is_followup and not has_doc_ref and not state.get("file_paths"):
             polite_msg = (
                 "Lo siento, no dispongo de información sobre ese tema. Sólo puedo ayudarte en temas financieros y legales."
             )

@@ -32,6 +32,7 @@ class GuardrailAgent:
             "- Temas FINANCIEROS (análisis de estados financieros, inversiones, presupuestos, métricas económicas, etc.)\n\n"
             "Instrucciones:\n"
             "- Si la consulta está claramente relacionada con legal o finanzas, responde SOLO con: ACCEPT\n"
+            "- Si el usuario pide repetir, aclarar, reformular o hacer preguntas sobre respuestas previas de la misma conversación, responde: ACCEPT\n"
             "- Si la consulta es sobre otros temas (tecnología, medicina, recetas, historia, etc.), responde SOLO con: REJECT\n"
             "- Si la consulta es ambigua o un saludo inicial, responde con: ACCEPT\n\n"
             "Responde únicamente con ACCEPT o REJECT, sin explicaciones adicionales."

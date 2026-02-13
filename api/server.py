@@ -1,15 +1,22 @@
 import os
+import re
 import uuid
 import shutil
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from pydantic import ValidationError
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from agents.orchestrator import OrchestratorAgent, VoiceOrchestratorAgent
 from agents.guardrail import GuardrailAgent
 from agents.azure_client import AzureOpenAIClient
 from config.sql import (
     init_db,
+    create_user,
+    get_user_by_username,
+    get_user_by_token,
+    create_auth_token,
+    revoke_auth_token,
     create_session,
     session_exists,
     add_message,
@@ -21,7 +28,7 @@ from config.sql import (
 )
 from utils.doc_utils import strip_hidden_doc_tags
 
-from models.request import QueryRequest, CreateSessionRequest
+from models.request import QueryRequest, CreateSessionRequest, LoginRequest, RegisterRequest
 from models.response import (
     QueryResponse,
     ErrorResponse,
@@ -29,6 +36,7 @@ from models.response import (
     SessionsListResponse,
     MessagesResponse,
     SuccessResponse,
+    AuthResponse,
     SessionInfo,
     MessageInfo,
 )
@@ -39,6 +47,33 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 app = Flask(__name__)
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "*")
 CORS(app, resources={r"/api/*": {"origins": frontend_origin}, r"/health/*": {"origins": frontend_origin}})
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9]+$")
+
+
+def _get_auth_token() -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def _get_authenticated_user():
+    token = _get_auth_token()
+    if not token:
+        return None
+    return get_user_by_token(token)
+
+
+def _require_user():
+    user = _get_authenticated_user()
+    if not user:
+        error_resp = ErrorResponse(
+            error="unauthorized",
+            code="UNAUTHORIZED"
+        )
+        return None, (jsonify(error_resp.dict()), 401)
+    return user, None
 
 
 @app.get("/health")
@@ -78,6 +113,106 @@ def admin_init_db():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.post("/api/auth/register")
+def register_user():
+    try:
+        data = request.get_json(silent=True) or {}
+        req = RegisterRequest(
+            username=data.get("username"),
+            password=data.get("password"),
+            password_confirm=data.get("password_confirm"),
+        )
+    except ValidationError:
+        error_resp = ErrorResponse(
+            error="Invalid request data",
+            code="VALIDATION_ERROR"
+        )
+        return jsonify(error_resp.dict()), 400
+
+    username = req.username.strip()
+    if not USERNAME_RE.match(username):
+        error_resp = ErrorResponse(
+            error="Nombre de usuario no válido",
+            code="INVALID_USERNAME"
+        )
+        return jsonify(error_resp.dict()), 400
+
+    if req.password != req.password_confirm:
+        error_resp = ErrorResponse(
+            error="Las contraseñas no coinciden",
+            code="PASSWORD_MISMATCH"
+        )
+        return jsonify(error_resp.dict()), 400
+
+    if get_user_by_username(username):
+        error_resp = ErrorResponse(
+            error="Usuario ya registrado",
+            code="USER_EXISTS"
+        )
+        return jsonify(error_resp.dict()), 409
+
+    password_hash = generate_password_hash(req.password)
+    user_id = create_user(username, password_hash)
+    token = create_auth_token(user_id)
+
+    response = AuthResponse(token=token, username=username)
+    return jsonify(response.dict())
+
+
+@app.post("/api/auth/login")
+def login_user():
+    try:
+        data = request.get_json(silent=True) or {}
+        req = LoginRequest(
+            username=data.get("username"),
+            password=data.get("password"),
+        )
+    except ValidationError:
+        error_resp = ErrorResponse(
+            error="Invalid request data",
+            code="VALIDATION_ERROR"
+        )
+        return jsonify(error_resp.dict()), 400
+
+    username = req.username.strip()
+    user = get_user_by_username(username)
+    if not user:
+        error_resp = ErrorResponse(
+            error="Usuario no encontrado",
+            code="USER_NOT_FOUND"
+        )
+        return jsonify(error_resp.dict()), 404
+
+    if not check_password_hash(user.get("password_hash", ""), req.password):
+        error_resp = ErrorResponse(
+            error="Contraseña incorrecta",
+            code="INVALID_PASSWORD"
+        )
+        return jsonify(error_resp.dict()), 401
+
+    token = create_auth_token(user["id"])
+    response = AuthResponse(token=token, username=user["username"])
+    return jsonify(response.dict())
+
+
+@app.get("/api/auth/me")
+def auth_me():
+    user, error = _require_user()
+    if error:
+        return error
+    response = AuthResponse(token=_get_auth_token(), username=user["username"])
+    return jsonify(response.dict())
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    token = _get_auth_token()
+    if token:
+        revoke_auth_token(token)
+    response = SuccessResponse(message="Sesión cerrada")
+    return jsonify(response.dict())
+
+
 def save_uploads(files, session_id: str) -> list:
     """Save uploaded files into uploads/{session_id}/ and return stored paths."""
     out_dir = os.path.join(UPLOADS_DIR, session_id)
@@ -97,6 +232,9 @@ def save_uploads(files, session_id: str) -> list:
 @app.route("/api/query", methods=["POST"])
 def handle_query():
     """Handle user queries with optional file uploads."""
+    user, error = _require_user()
+    if error:
+        return error
     # Validate request with Pydantic
     try:
         req = QueryRequest(
@@ -116,8 +254,15 @@ def handle_query():
     # Generate session_id if not provided
     session_id = req.session_id or uuid.uuid4().hex
 
+    if req.session_id and session_exists(req.session_id) and not session_exists(req.session_id, user["id"]):
+        error_resp = ErrorResponse(
+            error="Session not found",
+            code="SESSION_NOT_FOUND"
+        )
+        return jsonify(error_resp.dict()), 404
+
     # ensure session exists
-    create_session(session_id)
+    create_session(user["id"], session_id)
 
     filenames = [f.filename for f in uploaded]
 
@@ -132,7 +277,7 @@ def handle_query():
 
     # Guardrail only on first message
     guard = GuardrailAgent(client=client)
-    recent_one = get_recent_messages(session_id, limit=1)
+    recent_one = get_recent_messages(session_id, limit=1, user_id=user["id"])
     is_first_message = len(recent_one) == 0
 
     # Check if this is the first message and user is declaring intent
@@ -166,7 +311,7 @@ def handle_query():
         orch = VoiceOrchestratorAgent(client) if req.voice_mode else OrchestratorAgent(client)
 
         # fetch recent messages for context
-        recent = get_recent_messages(session_id, limit=50)
+        recent = get_recent_messages(session_id, limit=50, user_id=user["id"])
         session_history = [{"role": r["role"], "content": r["content"]} for r in recent]
 
         reply_with_tags = orch.respond(req.query, filepaths, session_history=session_history)
@@ -199,6 +344,9 @@ def handle_query():
 @app.route("/api/sessions", methods=["POST"])
 def create_session_endpoint():
     """Create a new session."""
+    user, error = _require_user()
+    if error:
+        return error
     # Validate request with Pydantic (optional name)
     try:
         # Handle both JSON body and empty requests
@@ -213,7 +361,7 @@ def create_session_endpoint():
         )
         return jsonify(error_resp.dict()), 400
     
-    sid = create_session()
+    sid = create_session(user["id"])
     welcome = "Bienvenido. Por favor indica junto a tu mensaje si tu consulta será 'financiera' o 'legal'."
     
     response = SessionResponse(
@@ -226,7 +374,11 @@ def create_session_endpoint():
 @app.route("/api/sessions", methods=["GET"])
 def list_sessions_endpoint():
     """List all sessions."""
-    lst = list_sessions()
+    user, error = _require_user()
+    if error:
+        return error
+
+    lst = list_sessions(user["id"])
 
     def to_iso(value):
         if hasattr(value, "isoformat"):
@@ -251,27 +403,39 @@ def list_sessions_endpoint():
 @app.route("/api/sessions/<session_id>/clear", methods=["POST"])
 def clear_session_endpoint(session_id):
     """Clear messages from a session."""
-    if not session_exists(session_id):
+    user, error = _require_user()
+    if error:
+        return error
+
+    if not session_exists(session_id, user["id"]):
         error_resp = ErrorResponse(
             error="Session not found",
             code="SESSION_NOT_FOUND"
         )
         return jsonify(error_resp.dict()), 404
     
-    clear_session(session_id)
+    clear_session(session_id, user["id"])
     response = SuccessResponse(message="Session cleared successfully")
     return jsonify(response.dict())
 
 
 @app.route("/api/sessions", methods=["DELETE"])
 def delete_all_sessions_endpoint():
-    delete_all_sessions()
+    user, error = _require_user()
+    if error:
+        return error
+
+    current_sessions = list_sessions(user["id"])
+    delete_all_sessions(user["id"])
 
     if os.path.isdir(UPLOADS_DIR):
-        try:
-            shutil.rmtree(UPLOADS_DIR)
-        except Exception:
-            pass
+        for s in current_sessions:
+            session_dir = os.path.join(UPLOADS_DIR, s.get("id", ""))
+            if os.path.isdir(session_dir):
+                try:
+                    shutil.rmtree(session_dir)
+                except Exception:
+                    pass
         os.makedirs(UPLOADS_DIR, exist_ok=True)
 
     response = SuccessResponse(message="All sessions deleted")
@@ -280,14 +444,18 @@ def delete_all_sessions_endpoint():
 
 @app.route("/api/sessions/<session_id>", methods=["DELETE"])
 def delete_session_endpoint(session_id):
-    if not session_exists(session_id):
+    user, error = _require_user()
+    if error:
+        return error
+
+    if not session_exists(session_id, user["id"]):
         error_resp = ErrorResponse(
             error="Session not found",
             code="SESSION_NOT_FOUND"
         )
         return jsonify(error_resp.dict()), 404
 
-    delete_session(session_id)
+    delete_session(session_id, user["id"])
 
     session_dir = os.path.join(UPLOADS_DIR, session_id)
     if os.path.isdir(session_dir):
@@ -303,7 +471,11 @@ def delete_session_endpoint(session_id):
 @app.route("/api/sessions/<session_id>/messages", methods=["GET"])
 def get_session_messages_endpoint(session_id):
     """Get messages from a session."""
-    if not session_exists(session_id):
+    user, error = _require_user()
+    if error:
+        return error
+
+    if not session_exists(session_id, user["id"]):
         error_resp = ErrorResponse(
             error="Session not found",
             code="SESSION_NOT_FOUND"
@@ -311,7 +483,7 @@ def get_session_messages_endpoint(session_id):
         return jsonify(error_resp.dict()), 404
     
     limit = int(request.args.get("limit", 200))
-    msgs = get_recent_messages(session_id, limit=limit)
+    msgs = get_recent_messages(session_id, limit=limit, user_id=user["id"])
 
     # Convert to Pydantic models and optionally hide tags
     messages = []
@@ -339,6 +511,9 @@ def get_session_messages_endpoint(session_id):
 
 @app.route("/api/tts", methods=["POST"])
 def tts():
+    user, error = _require_user()
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:

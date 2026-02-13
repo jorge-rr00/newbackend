@@ -1,7 +1,10 @@
 """Request models for API validation."""
+import re
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List
 from uuid import UUID
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9]+$")
 
 
 class QueryRequest(BaseModel):
@@ -84,5 +87,48 @@ class CreateSessionRequest(BaseModel):
         schema_extra = {
             "example": {
                 "name": "Consulta financiera - Enero 2026"
+            }
+        }
+
+
+class RegisterRequest(BaseModel):
+    """Request model for user registration."""
+
+    username: str = Field(..., min_length=3, max_length=32, description="Username (alphanumeric)")
+    password: str = Field(..., min_length=6, max_length=128, description="User password")
+    password_confirm: str = Field(..., min_length=6, max_length=128, description="Password confirmation")
+
+    @validator("username")
+    def validate_username(cls, v):
+        v = v.strip()
+        if not USERNAME_RE.match(v):
+            raise ValueError("username must be alphanumeric")
+        return v
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "username": "usuario123",
+                "password": "secreto123",
+                "password_confirm": "secreto123"
+            }
+        }
+
+
+class LoginRequest(BaseModel):
+    """Request model for user login."""
+
+    username: str = Field(..., min_length=3, max_length=32, description="Username")
+    password: str = Field(..., min_length=6, max_length=128, description="User password")
+
+    @validator("username")
+    def validate_username(cls, v):
+        return v.strip()
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "username": "usuario123",
+                "password": "secreto123"
             }
         }

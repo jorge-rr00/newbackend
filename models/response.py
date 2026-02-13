@@ -74,6 +74,23 @@ class SessionResponse(BaseModel):
         }
 
 
+class AuthResponse(BaseModel):
+    """Response model for auth endpoints."""
+
+    ok: Literal[True] = True
+    token: str = Field(..., description="Auth token")
+    username: str = Field(..., description="Username")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "ok": True,
+                "token": "abc123token",
+                "username": "usuario123"
+            }
+        }
+
+
 class SessionInfo(BaseModel):
     """Session information."""
     

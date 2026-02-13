@@ -32,3 +32,4 @@ exec gunicorn -b 0.0.0.0:${PORT:-8000} \
   --max-requests 1000 \
   --max-requests-jitter 50 \
   api.server:app
+  api.server:app

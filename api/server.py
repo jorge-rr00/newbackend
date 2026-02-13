@@ -65,6 +65,19 @@ def _get_authenticated_user():
     return get_user_by_token(token)
 
 
+def _format_validation_error(err: ValidationError) -> str:
+    try:
+        details = err.errors() or []
+    except Exception:
+        details = []
+    if not details:
+        return "Datos invalidos"
+    first = details[0]
+    loc = ".".join(str(item) for item in first.get("loc", []) if item != "__root__")
+    msg = first.get("msg", "Datos invalidos")
+    return f"{loc}: {msg}" if loc else msg
+
+
 def _require_user():
     user = _get_authenticated_user()
     if not user:
@@ -122,9 +135,9 @@ def register_user():
             password=data.get("password"),
             password_confirm=data.get("password_confirm"),
         )
-    except ValidationError:
+    except ValidationError as e:
         error_resp = ErrorResponse(
-            error="Invalid request data",
+            error=_format_validation_error(e),
             code="VALIDATION_ERROR"
         )
         return jsonify(error_resp.dict()), 400
@@ -167,9 +180,9 @@ def login_user():
             username=data.get("username"),
             password=data.get("password"),
         )
-    except ValidationError:
+    except ValidationError as e:
         error_resp = ErrorResponse(
-            error="Invalid request data",
+            error=_format_validation_error(e),
             code="VALIDATION_ERROR"
         )
         return jsonify(error_resp.dict()), 400

@@ -65,6 +65,22 @@ FOLLOWUP_KEYWORDS = [
     "aclarame",
     "resumelo",
     "resumen",
+    "antes",
+    "anterior",
+    "previo",
+    "previa",
+    "pregunte",
+    "pregunté",
+    "preguntado",
+    "respuesta anterior",
+    "respuestas anteriores",
+    "me dijiste",
+    "me respondiste",
+    "que fue lo primero",
+    "que fue lo segundo",
+    "que temas",
+    "que temas",
+    "que temas",
 ]
 
 logger = logging.getLogger("nova.workflow")
@@ -158,8 +174,8 @@ class LangGraphAssistant:
             "1) If the answer is in the document, answer directly and stop.\n"
             "2) If NOT in the document and need legal/financial knowledge, respond with 'DOMAIN:LEGAL' or 'DOMAIN:FINANCIAL'.\n"
             "3) If the user asks to repeat, clarify, or refer to previous answers, respond based on the conversation context.\n"
-            "4) If the query is nonsense or unclear, ask the user to repeat or reformulate.\n"
-            "5) If the query is clearly out of scope (not legal/financial and not a follow-up), respond exactly: 'Lo siento, no dispongo de información sobre ese tema. Sólo puedo ayudarte en temas financieros y legales.'\n"
+            "4) If the query is nonsense or unclear, respond ONLY with: CLARIFY\n"
+            "5) If the query is clearly out of scope (not legal/financial and not a follow-up), respond ONLY with: OUT_OF_SCOPE\n"
             "6) Respond in Spanish (Castellano).\n"
             "\nDOCUMENT:\n"
             f"{doc_context}"
@@ -174,13 +190,19 @@ class LangGraphAssistant:
             logger.info(f"[Node: Orchestrator] Routing -> {domain}")
             return {"domain": domain, "final_response": ""}
 
-        # Direct answer
-        direct_answer = (res.content or "").strip()
-        if not is_finlegal and not is_followup and not has_doc_ref and not state.get("file_paths"):
+        if "OUT_OF_SCOPE" in upper:
             polite_msg = (
                 "Lo siento, no dispongo de información sobre ese tema. Sólo puedo ayudarte en temas financieros y legales."
             )
             return {"final_response": polite_msg}
+
+        if "CLARIFY" in upper:
+            return {"final_response": "No he entendido bien tu pregunta. ¿Podrías reformularla o dar más detalle?"}
+
+        # Direct answer
+        direct_answer = (res.content or "").strip()
+        if not is_finlegal and not is_followup and not has_doc_ref and not state.get("file_paths"):
+            return {"final_response": direct_answer}
 
         return {"final_response": direct_answer}
 

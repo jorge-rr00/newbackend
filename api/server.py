@@ -48,6 +48,22 @@ app = Flask(__name__)
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "*")
 CORS(app, resources={r"/api/*": {"origins": frontend_origin}, r"/health/*": {"origins": frontend_origin}})
 
+_db_ready = False
+
+
+def _ensure_db_ready():
+    global _db_ready
+    if _db_ready:
+        return
+    try:
+        init_db()
+        _db_ready = True
+    except Exception as e:
+        print(f"DB init failed: {e}")
+
+
+_ensure_db_ready()
+
 USERNAME_RE = re.compile(r"^[A-Za-z0-9]+$")
 
 
